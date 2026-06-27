@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>弾幕シューティング - DANMAKU</title>
+<style>
+  :root { --bg:#05060d; --accent:#5ad1ff; --pink:#ff5a8a; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: radial-gradient(circle at 50% 20%, #11132a 0%, #05060d 70%);
+    color: #dfe7ff; font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; user-select: none;
+  }
+  #wrap { position: relative; }
+  canvas {
+    display: block; background: #04040a;
+    border: 1px solid #1e2550;
+    border-radius: 10px;
+    box-shadow: 0 0 40px rgba(90,209,255,.18), inset 0 0 60px rgba(0,0,0,.6);
+  }
+  #overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; gap: 14px;
+    background: rgba(4,5,15,.78); border-radius: 10px;
+    backdrop-filter: blur(2px);
+  }
+  #overlay.hidden { display: none; }
+  h1 { margin: 0; font-size: 40px; letter-spacing: 6px;
+    background: linear-gradient(90deg, var(--accent), var(--pink));
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: #93a0d0; font-size: 14px; line-height: 1.9; }
+  kbd { background:#1a2150; border:1px solid #33407d; border-radius:5px;
+    padding:1px 7px; font-family:monospace; color:#cfe0ff; }
+  .btn { margin-top: 6px; padding: 10px 26px; font-size: 16px; cursor: pointer;
+    color:#04040a; font-weight:700; letter-spacing:2px; border:none; border-radius:8px;
+    background: linear-gradient(90deg, var(--accent), var(--pink)); }
+  .btn:hover { filter: brightness(1.1); }
+  #hud { position:absolute; top:8px; left:12px; right:12px;
+    display:flex; justify-content:space-between; font-size:14px;
+    text-shadow:0 0 6px #000; pointer-events:none; font-variant-numeric: tabular-nums; }
+  .big { font-size: 56px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="480" height="680"></canvas>
+  <div id="hud">
+    <div>SCORE <b id="score">0</b></div>
+    <div>LIFE <b id="life">3</b></div>
+    <div>HI <b id="hi">0</b></div>
+  </div>
+  <div id="overlay">
+    <h1>DANMAKU</h1>
+    <div class="sub">
+      <kbd>←↑↓→</kbd> / <kbd>WASD</kbd> 移動 &nbsp; <kbd>Z</kbd> or <kbd>Space</kbd> ショット<br>
+      <kbd>Shift</kbd> 押しながら 低速（精密移動・当たり判定が見える）<br>
+      <kbd>P</kbd> ポーズ<br>
+      自機の中心の小さな点だけが当たり判定。弾の隙間を抜けろ！
+    </div>
+    <button class="btn" id="startBtn">START</button>
+  </div>
+</div>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const elScore = document.getElementById('score');
+const elLife  = document.getElementById('life');
+const elHi    = document.getElementById('hi');
+
+let hi = +(localStorage.getItem('danmaku_hi') || 0);
+elHi.textContent = hi;
+
+// ---- input ----
+const keys = {};
+addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === 'p' || e.key === 'P') togglePause();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ---- game state ----
+let state, player, enemies, eBullets, pBullets, particles, stars;
+let frame, score, life, running, paused, spawnTimer, wave, boss, shake;
+
+function reset() {
+  player = { x: W/2, y: H-90, r: 14, hitR: 3, speed: 4.6, slow: 2.0,
+             cool: 0, inv: 90, dead: false };
+  enemies = []; eBullets = []; pBullets = []; particles = [];
+  stars = Array.from({length: 90}, () => ({
+    x: Math.random()*W, y: Math.random()*H,
+    z: Math.random()*0.8+0.2 }));
+  frame = 0; score = 0; life = 3; running = true; paused = false;
+  spawnTimer = 0; wave = 0; boss = null; shake = 0;
+  updateHud();
+}
+
+function updateHud(){
+  elScore.textContent = score;
+  elLife.textContent = Math.max(0, life);
+  elHi.textContent = hi;
+}
+
+function togglePause(){
+  if (!running) return;
+  paused = !paused;
+  if (paused) {
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = '<h1>PAUSE</h1><div class="sub">Pで再開</div>';
+  } else {
+    overlay.classList.add('hidden');
+  }
+}
+
+// ---- helpers ----
+function spawnParticles(x, y, color, n=14, spd=4){
+  for (let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, s = Math.random()*spd+0.5;
+    particles.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s,
+      life: 30+Math.random()*20, color });
+  }
+}
+function eb(x,y,ang,sp,color='#ff5a8a',r=5){
+  eBullets.push({ x, y, vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp, r, color });
+}
+
+// ---- enemies ----
+function spawnWave(){
+  wave++;
+  if (wave % 5 === 0){ spawnBoss(); return; }
+  const n = 3 + Math.min(5, Math.floor(wave/2));
+  const pat = wave % 4;
+  for (let i=0;i<n;i++){
+    enemies.push({
+      x: (i+1)*W/(n+1), y: -40 - i*30,
+      r: 16, hp: 6 + wave, t: Math.random()*100,
+      type: pat, fire: 0,
+      vx: 0, vy: 1.1,
+      score: 100
+    });
+  }
+}
+
+function spawnBoss(){
+  boss = {
+    x: W/2, y: -120, tx: W/2, ty: 150,
+    r: 40, hp: 220 + wave*30, maxhp: 220 + wave*30,
+    t: 0, phase: 0, entering: true, score: 5000
+  };
+}
+
+function enemyFire(e){
+  const ang = Math.atan2(player.y - e.y, player.x - e.x);
+  if (e.type === 0){ // aimed 3-way
+    for (let k=-1;k<=1;k++) eb(e.x, e.y, ang + k*0.22, 3.0);
+  } else if (e.type === 1){ // ring
+    const m = 10;
+    for (let k=0;k<m;k++) eb(e.x, e.y, (k/m)*Math.PI*2 + e.t*0.05, 2.4, '#ffb95a');
+  } else if (e.type === 2){ // spiral aimed
+    eb(e.x, e.y, ang, 3.4, '#5affc8');
+    eb(e.x, e.y, ang+0.4, 3.0, '#5affc8');
+    eb(e.x, e.y, ang-0.4, 3.0, '#5affc8');
+  } else { // wave shot
+    for (let k=-2;k<=2;k++) eb(e.x, e.y, Math.PI/2 + k*0.18, 2.8, '#c98aff');
+  }
+}
+
+function bossPattern(b){
+  const cx=b.x, cy=b.y, t=b.t;
+  const phase = Math.floor(t/300) % 3;
+  if (phase === 0){ // rotating spiral
+    if (t % 4 === 0){
+      const arms = 4;
+      for (let a=0;a<arms;a++){
+        const ang = t*0.08 + a*(Math.PI*2/arms);
+        eb(cx, cy, ang, 2.8, '#ff5a8a', 5);
+      }
+    }
+  } else if (phase === 1){ // aimed bursts + ring
+    if (t % 60 === 0){
+      const aim = Math.atan2(player.y-cy, player.x-cx);
+      for (let k=-3;k<=3;k++) eb(cx, cy, aim+k*0.13, 3.4, '#ffb95a');
+    }
+    if (t % 8 === 0){
+      const m=18;
+      for(let k=0;k<m;k++) eb(cx,cy,(k/m)*Math.PI*2 + t*0.02, 1.8,'#5ad1ff',4);
+    }
+  } else { // flower
+    if (t % 6 === 0){
+      const m=12;
+      for(let k=0;k<m;k++){
+        const ang=(k/m)*Math.PI*2 + Math.sin(t*0.03)*1.2;
+        eb(cx,cy,ang, 2.6 + Math.sin(t*0.05),'#c98aff',5);
+      }
+    }
+  }
+}
+
+// ---- main update ----
+function update(){
+  frame++;
+  // stars
+  for (const s of stars){ s.y += s.z*2.2; if (s.y>H){ s.y=0; s.x=Math.random()*W; } }
+
+  // player movement
+  const slow = keys['shift'];
+  const sp = slow ? player.slow : player.speed;
+  let dx=0, dy=0;
+  if (keys['arrowleft']||keys['a']) dx--;
+  if (keys['arrowright']||keys['d']) dx++;
+  if (keys['arrowup']||keys['w']) dy--;
+  if (keys['arrowdown']||keys['s']) dy++;
+  if (dx&&dy){ dx*=0.707; dy*=0.707; }
+  player.x = Math.max(player.r, Math.min(W-player.r, player.x+dx*sp));
+  player.y = Math.max(player.r, Math.min(H-player.r, player.y+dy*sp));
+  if (player.inv>0) player.inv--;
+
+  // shoot
+  if (player.cool>0) player.cool--;
+  if ((keys['z']||keys[' ']) && player.cool===0){
+    pBullets.push({x:player.x-7,y:player.y-10,vy:-11,r:4});
+    pBullets.push({x:player.x+7,y:player.y-10,vy:-11,r:4});
+    player.cool = 6;
+  }
+
+  // spawn waves
+  if (!boss){
+    spawnTimer--;
+    if (spawnTimer<=0 && enemies.length===0){
+      spawnWave();
+      spawnTimer = 120;
+    }
+  }
+
+  // enemies
+  for (const e of enemies){
+    e.t++;
+    e.y += e.vy;
+    e.x += Math.sin(e.t*0.04)*1.2;
+    if (e.y>120) e.vy = Math.max(0, e.vy-0.05);
+    e.fire++;
+    const interval = e.type===1?90:60;
+    if (e.y>20 && e.fire%interval===0) enemyFire(e);
+  }
+
+  // boss logic
+  if (boss){
+    if (boss.entering){
+      boss.y += (boss.ty - boss.y)*0.03;
+      if (Math.abs(boss.y-boss.ty)<2){ boss.entering=false; }
+    } else {
+      boss.t++;
+      boss.x = W/2 + Math.sin(boss.t*0.02)*140;
+      bossPattern(boss);
+    }
+  }
+
+  // player bullets
+  for (const b of pBullets){ b.y += b.vy; }
+  pBullets = pBullets.filter(b=>b.y>-20);
+
+  // collision: pBullets vs enemies
+  for (const b of pBullets){
+    for (const e of enemies){
+      if (Math.hypot(b.x-e.x,b.y-e.y) < e.r+b.r){
+        e.hp -= 1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',3,2); break;
+      }
+    }
+    if (boss && !boss.entering && Math.hypot(b.x-boss.x,b.y-boss.y)<boss.r+b.r){
+      boss.hp -= 1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',3,2);
+    }
+  }
+  pBullets = pBullets.filter(b=>!b.dead);
+
+  // dead enemies
+  for (const e of enemies){
+    if (e.hp<=0){
+      score += e.score; spawnParticles(e.x,e.y,'#ffb95a',22,5); shake=6;
+    }
+  }
+  enemies = enemies.filter(e=>e.hp>0 && e.y<H+60);
+
+  if (boss && boss.hp<=0){
+    score += boss.score; spawnParticles(boss.x,boss.y,'#ff5a8a',60,8);
+    shake=20; boss=null; spawnTimer=90;
+  }
+
+  // enemy bullets
+  for (const b of eBullets){ b.x+=b.vx; b.y+=b.vy; }
+  eBullets = eBullets.filter(b=> b.x>-20&&b.x<W+20&&b.y>-20&&b.y<H+20);
+
+  // collision: eBullets vs player
+  if (player.inv<=0){
+    for (const b of eBullets){
+      if (Math.hypot(b.x-player.x,b.y-player.y) < b.r+player.hitR){
+        hitPlayer(); break;
+      }
+    }
+    for (const e of enemies){
+      if (Math.hypot(e.x-player.x,e.y-player.y) < e.r+player.hitR){
+        hitPlayer(); break;
+      }
+    }
+  }
+
+  // particles
+  for (const p of particles){ p.x+=p.vx; p.y+=p.vy; p.vx*=0.94; p.vy*=0.94; p.life--; }
+  particles = particles.filter(p=>p.life>0);
+
+  if (shake>0) shake--;
+  score += 1; // survival bonus
+  updateHud();
+}
+
+function hitPlayer(){
+  life--; player.inv = 120;
+  eBullets = []; // clear screen as a bomb-on-death
+  spawnParticles(player.x,player.y,'#5ad1ff',40,6); shake=16;
+  if (life<=0) gameOver();
+  updateHud();
+}
+
+function gameOver(){
+  running=false;
+  if (score>hi){ hi=score; localStorage.setItem('danmaku_hi',hi); }
+  updateHud();
+  overlay.classList.remove('hidden');
+  overlay.innerHTML =
+    '<h1>GAME OVER</h1>'+
+    '<div class="sub">SCORE <b class="big" style="display:block">'+score+'</b>'+
+    'HI-SCORE '+hi+'</div>'+
+    '<button class="btn" id="restartBtn">RETRY</button>';
+  document.getElementById('restartBtn').onclick = startGame;
+}
+
+// ---- render ----
+function draw(){
+  ctx.save();
+  if (shake>0) ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
+
+  ctx.fillStyle = '#04040a';
+  ctx.fillRect(-20,-20,W+40,H+40);
+
+  // stars
+  for (const s of stars){
+    ctx.globalAlpha = s.z;
+    ctx.fillStyle = '#8fa6ff';
+    ctx.fillRect(s.x, s.y, s.z*2, s.z*2);
+  }
+  ctx.globalAlpha = 1;
+
+  // particles
+  for (const p of particles){
+    ctx.globalAlpha = Math.max(0,p.life/45);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x-1.5, p.y-1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  // player bullets
+  ctx.fillStyle = '#9fe8ff';
+  for (const b of pBullets){
+    ctx.fillRect(b.x-b.r/2, b.y-b.r*2, b.r, b.r*3);
+  }
+
+  // enemies
+  for (const e of enemies){
+    ctx.fillStyle = '#ff7aa8';
+    ctx.beginPath(); ctx.moveTo(e.x, e.y+e.r);
+    ctx.lineTo(e.x-e.r, e.y-e.r); ctx.lineTo(e.x+e.r, e.y-e.r);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(e.x-2,e.y-2,4,4);
+  }
+
+  // boss
+  if (boss){
+    ctx.save();
+    ctx.translate(boss.x, boss.y);
+    ctx.rotate(boss.t*0.01);
+    ctx.fillStyle = '#ff5a8a';
+    ctx.beginPath();
+    for (let i=0;i<6;i++){
+      const a=i/6*Math.PI*2;
+      ctx[i?'lineTo':'moveTo'](Math.cos(a)*boss.r, Math.sin(a)*boss.r);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    // hp bar
+    ctx.fillStyle='#33203a'; ctx.fillRect(40,14,W-80,6);
+    ctx.fillStyle='#ff5a8a'; ctx.fillRect(40,14,(W-80)*Math.max(0,boss.hp/boss.maxhp),6);
+  }
+
+  // enemy bullets
+  for (const b of eBullets){
+    ctx.fillStyle = b.color;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=0.4; ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(b.x-b.r*0.3,b.y-b.r*0.3,b.r*0.4,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  // player
+  if (!(player.inv>0 && frame%6<3)){
+    const slow = keys['shift'];
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.fillStyle = '#5ad1ff';
+    ctx.beginPath();
+    ctx.moveTo(0,-player.r);
+    ctx.lineTo(-player.r*0.8, player.r);
+    ctx.lineTo(0, player.r*0.5);
+    ctx.lineTo(player.r*0.8, player.r);
+    ctx.closePath(); ctx.fill();
+    // hitbox
+    if (slow){
+      ctx.strokeStyle='rgba(255,255,255,.5)';
+      ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.fillStyle = slow ? '#fff' : '#ffe0ec';
+    ctx.beginPath(); ctx.arc(0,0,player.hitR+1,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+// ---- loop ----
+function loop(){
+  if (running && !paused){ update(); draw(); }
+  requestAnimationFrame(loop);
+}
+
+function startGame(){
+  overlay.classList.add('hidden');
+  reset();
+}
+
+startBtn.onclick = startGame;
+draw();
+loop();
+</script>
+</body>
+</html>
