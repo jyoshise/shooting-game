@@ -2,414 +2,671 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>弾幕シューティング - DANMAKU</title>
 <style>
   :root { --bg:#05060d; --accent:#5ad1ff; --pink:#ff5a8a; }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; height: 100%;
     background: radial-gradient(circle at 50% 20%, #11132a 0%, #05060d 70%);
     color: #dfe7ff; font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif;
     display: flex; align-items: center; justify-content: center;
-    overflow: hidden; user-select: none;
+    overflow: hidden; user-select: none; touch-action: none;
   }
-  #wrap { position: relative; }
+  #wrap { position: relative; width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center; }
   canvas {
     display: block; background: #04040a;
-    border: 1px solid #1e2550;
-    border-radius: 10px;
+    border: 1px solid #1e2550; border-radius: 10px;
     box-shadow: 0 0 40px rgba(90,209,255,.18), inset 0 0 60px rgba(0,0,0,.6);
+    max-width: 100%; max-height: 100%;
   }
   #overlay {
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    text-align: center; gap: 14px;
-    background: rgba(4,5,15,.78); border-radius: 10px;
+    text-align: center; gap: 14px; padding: 20px;
+    background: rgba(4,5,15,.82); border-radius: 10px;
     backdrop-filter: blur(2px);
   }
   #overlay.hidden { display: none; }
-  h1 { margin: 0; font-size: 40px; letter-spacing: 6px;
+  h1 { margin: 0; font-size: 42px; letter-spacing: 6px;
     background: linear-gradient(90deg, var(--accent), var(--pink));
     -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .sub { color: #93a0d0; font-size: 14px; line-height: 1.9; }
+  .sub { color: #aab6e0; font-size: 14px; line-height: 1.9; max-width: 420px; }
   kbd { background:#1a2150; border:1px solid #33407d; border-radius:5px;
     padding:1px 7px; font-family:monospace; color:#cfe0ff; }
-  .btn { margin-top: 6px; padding: 10px 26px; font-size: 16px; cursor: pointer;
+  .btn { margin-top: 4px; padding: 11px 26px; font-size: 16px; cursor: pointer;
     color:#04040a; font-weight:700; letter-spacing:2px; border:none; border-radius:8px;
     background: linear-gradient(90deg, var(--accent), var(--pink)); }
   .btn:hover { filter: brightness(1.1); }
+  .btn.alt { background: linear-gradient(90deg,#3a4170,#5a4170); color:#dfe7ff; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  .big { font-size: 52px; display:block; margin:4px 0; }
   #hud { position:absolute; top:8px; left:12px; right:12px;
-    display:flex; justify-content:space-between; font-size:14px;
-    text-shadow:0 0 6px #000; pointer-events:none; font-variant-numeric: tabular-nums; }
-  .big { font-size: 56px; }
+    display:flex; justify-content:space-between; align-items:flex-start;
+    font-size:13px; text-shadow:0 0 6px #000; pointer-events:none;
+    font-variant-numeric: tabular-nums; gap:8px; }
+  #hud .col-r { text-align:right; }
+  .lab { color:#8c9bd0; font-size:11px; letter-spacing:1px; }
+  .mult { color:#ffd95a; }
+  .graze { color:#5affc8; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="c" width="480" height="680"></canvas>
   <div id="hud">
-    <div>SCORE <b id="score">0</b></div>
-    <div>LIFE <b id="life">3</b></div>
-    <div>HI <b id="hi">0</b></div>
-  </div>
-  <div id="overlay">
-    <h1>DANMAKU</h1>
-    <div class="sub">
-      <kbd>←↑↓→</kbd> / <kbd>WASD</kbd> 移動 &nbsp; <kbd>Z</kbd> or <kbd>Space</kbd> ショット<br>
-      <kbd>Shift</kbd> 押しながら 低速（精密移動・当たり判定が見える）<br>
-      <kbd>P</kbd> ポーズ<br>
-      自機の中心の小さな点だけが当たり判定。弾の隙間を抜けろ！
+    <div>
+      <div><span class="lab">SCORE</span> <b id="score">0</b></div>
+      <div><span class="lab">x</span><span class="mult" id="mult">1.0</span>
+           &nbsp;<span class="lab">GRAZE</span> <span class="graze" id="graze">0</span></div>
     </div>
-    <button class="btn" id="startBtn">START</button>
+    <div class="col-r">
+      <div><span class="lab">HI</span> <b id="hi">0</b></div>
+      <div>♥<b id="life">3</b>&nbsp;&nbsp;✸<b id="bomb">2</b>&nbsp;&nbsp;PW<b id="pw">1</b></div>
+    </div>
   </div>
+  <div id="overlay"></div>
 </div>
 <script>
+"use strict";
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height;
 const overlay = document.getElementById('overlay');
-const startBtn = document.getElementById('startBtn');
-const titleOverlayHtml = overlay.innerHTML;
-const elScore = document.getElementById('score');
-const elLife  = document.getElementById('life');
-const elHi    = document.getElementById('hi');
+const el = id => document.getElementById(id);
 
-let hi = +(localStorage.getItem('danmaku_hi') || 0);
-elHi.textContent = hi;
+// ===================== CONFIG =====================
+const CONFIG = {
+  // global speed multiplier — lower = slower & easier. Tuned down from the
+  // original (was effectively 1.0 and felt too fast).
+  speedScale: 0.7,
+  player: { speed: 3.6, slow: 1.7, r: 13, hitR: 3, grazeR: 18, fireCool: 7 },
+  enemyBulletBase: 2.0,   // base enemy bullet speed before per-shot scaling
+  startInvuln: 110,
+  bombInvuln: 130,
+  waveGap: 170,           // frames of breathing room between waves
+  startLives: 3,
+  startBombs: 2,
+  difficulty: 'NORMAL',   // EASY | NORMAL
+};
+const DIFF = {
+  EASY:   { bulletMul: 0.78, fireRateMul: 1.45, hpMul: 0.8,  spawnGapMul: 1.3 },
+  NORMAL: { bulletMul: 1.0,  fireRateMul: 1.0,  hpMul: 1.0,  spawnGapMul: 1.0 },
+};
+const PALETTE = {
+  bg:'#04040a', star:'#8fa6ff', pBul:'#9fe8ff',
+  e:['#ff7aa8','#ffb95a','#5affc8','#c98aff','#ff5a8a','#7ad1ff','#b6ff6a','#ff944d'],
+};
 
-// ---- input ----
+// ===================== Seeded RNG =====================
+let _seed = 1;
+function srand(s){ _seed = (s>>>0) || 1; }
+function rnd(){ // xorshift32 -> [0,1)
+  _seed ^= _seed<<13; _seed^=_seed>>>17; _seed^=_seed<<5; _seed>>>=0;
+  return _seed / 4294967296;
+}
+const rrange=(a,b)=>a+rnd()*(b-a);
+
+// ===================== Audio (WebAudio, synth) =====================
+const Audio2 = (()=>{
+  let ac=null, master=null, muted=false;
+  function ensure(){
+    if(!ac){ ac=new (window.AudioContext||window.webkitAudioContext)();
+      master=ac.createGain(); master.gain.value=0.18; master.connect(ac.destination); }
+    if(ac.state==='suspended') ac.resume();
+  }
+  function blip(freq,dur,type='square',vol=1,slide=0){
+    if(muted||!ac) return;
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type=type; o.frequency.value=freq;
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide), ac.currentTime+dur);
+    g.gain.setValueAtTime(0.0001,ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(vol,ac.currentTime+0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001,ac.currentTime+dur);
+    o.connect(g); g.connect(master); o.start(); o.stop(ac.currentTime+dur+0.02);
+  }
+  function noise(dur,vol=1){
+    if(muted||!ac) return;
+    const n=ac.sampleRate*dur, buf=ac.createBuffer(1,n,ac.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+    const s=ac.createBufferSource(); s.buffer=buf;
+    const g=ac.createGain(); g.gain.value=vol;
+    s.connect(g); g.connect(master); s.start();
+  }
+  return {
+    init:ensure,
+    shot:()=>blip(880,0.05,'square',0.25,-200),
+    hit:()=>blip(1200,0.03,'square',0.15,-300),
+    explode:()=>{ noise(0.25,0.6); blip(160,0.2,'sawtooth',0.4,-80); },
+    boss:()=>{ noise(0.5,0.9); blip(90,0.5,'sawtooth',0.6,-30); },
+    power:()=>{ blip(660,0.08,'triangle',0.4); setTimeout(()=>blip(990,0.1,'triangle',0.4),70); },
+    bomb:()=>{ noise(0.6,1.0); blip(220,0.5,'square',0.5,-120); },
+    damage:()=>{ blip(200,0.3,'sawtooth',0.5,-120); noise(0.2,0.4); },
+    toggle:()=>{ muted=!muted; return muted; },
+    isMuted:()=>muted,
+  };
+})();
+
+// ===================== Input =====================
 const keys = {};
-addEventListener('keydown', e => {
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-  keys[e.key.toLowerCase()] = true;
-  if (e.key === 'p' || e.key === 'P') togglePause();
+addEventListener('keydown', e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  const k=e.key.toLowerCase();
+  keys[k]=true;
+  if(k==='p') togglePause();
+  if(k==='x') tryBomb();
+  if(k==='m'){ const m=Audio2.toggle(); }
 });
-addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
 
-// ---- game state ----
-let state, player, enemies, eBullets, pBullets, particles, stars;
-let frame, score, life, running, paused, spawnTimer, wave, boss, shake;
+// touch
+let touch = { active:false, x:0, y:0 };
+function canvasPos(clientX, clientY){
+  const r=cv.getBoundingClientRect();
+  return { x:(clientX-r.left)*(W/r.width), y:(clientY-r.top)*(H/r.height) };
+}
+cv.addEventListener('touchstart', e=>{
+  e.preventDefault(); Audio2.init();
+  const t=e.touches[0], p=canvasPos(t.clientX,t.clientY);
+  touch.active=true; touch.x=p.x; touch.y=p.y;
+}, {passive:false});
+cv.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  const t=e.touches[0], p=canvasPos(t.clientX,t.clientY);
+  touch.x=p.x; touch.y=p.y;
+}, {passive:false});
+cv.addEventListener('touchend', e=>{ e.preventDefault(); touch.active=false; }, {passive:false});
+// double tap = bomb
+let lastTap=0;
+cv.addEventListener('touchstart', ()=>{
+  const now=Date.now(); if(now-lastTap<280) tryBomb(); lastTap=now;
+}, {passive:true});
 
-function reset() {
-  player = { x: W/2, y: H-90, r: 14, hitR: 3, speed: 4.6, slow: 2.0,
-             cool: 0, inv: 90, dead: false };
-  enemies = []; eBullets = []; pBullets = []; particles = [];
-  stars = Array.from({length: 90}, () => ({
-    x: Math.random()*W, y: Math.random()*H,
-    z: Math.random()*0.8+0.2 }));
-  frame = 0; score = 0; life = 3; running = true; paused = false;
-  spawnTimer = 0; wave = 0; boss = null; shake = 0;
+// auto-pause when tab hidden
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && running && !paused) togglePause();
+});
+
+// ===================== Game State =====================
+let player, enemies, eBullets, pBullets, particles, powerups, stars, lasers;
+let frame, score, life, bombs, power, running, paused, gameStarted;
+let spawnTimer, wave, boss, shake, combo, comboTimer, grazeCount, mult;
+let hi = +(localStorage.getItem('danmaku_hi')||0);
+let bombFlash = 0;
+
+function reset(){
+  srand(12345);
+  player = { x:W/2, y:H-90, cool:0, inv:CONFIG.startInvuln, dead:false };
+  enemies=[]; eBullets=[]; pBullets=[]; particles=[]; powerups=[]; stars=[]; lasers=[];
+  for(let i=0;i<90;i++) stars.push({x:rnd()*W,y:rnd()*H,z:rnd()*0.8+0.2});
+  frame=0; score=0; life=CONFIG.startLives; bombs=CONFIG.startBombs; power=1;
+  running=true; paused=false; spawnTimer=60; wave=0; boss=null; shake=0;
+  combo=0; comboTimer=0; grazeCount=0; mult=1; bombFlash=0;
   updateHud();
 }
 
 function updateHud(){
-  elScore.textContent = score;
-  elLife.textContent = Math.max(0, life);
-  elHi.textContent = hi;
+  el('score').textContent=score;
+  el('life').textContent=Math.max(0,life);
+  el('bomb').textContent=bombs;
+  el('pw').textContent=power;
+  el('hi').textContent=hi;
+  el('mult').textContent=mult.toFixed(1);
+  el('graze').textContent=grazeCount;
 }
 
-function showTitleOverlay(){
-  overlay.innerHTML = titleOverlayHtml;
+// ===================== Overlays =====================
+function startGame(){
+  Audio2.init();
+  overlay.classList.add('hidden');
+  gameStarted=true;
+  reset();
+}
+function showTitle(){
+  running=false; gameStarted=false;
   overlay.classList.remove('hidden');
-  document.getElementById('startBtn').onclick = startGame;
+  overlay.innerHTML =
+    '<h1>DANMAKU</h1>'+
+    '<div class="sub">'+
+      '<kbd>←↑↓→</kbd>/<kbd>WASD</kbd> 移動 &nbsp; <kbd>Z</kbd>/<kbd>Space</kbd> ショット<br>'+
+      '<kbd>Shift</kbd> 低速（精密・当たり判定表示）&nbsp; <kbd>X</kbd> ボム<br>'+
+      '<kbd>P</kbd> ポーズ &nbsp; <kbd>M</kbd> ミュート<br>'+
+      'スマホ: 画面ドラッグで移動・自動ショット / ダブルタップでボム<br>'+
+      '<b>中心の白い点だけが当たり判定。</b>弾をかすめるとGRAZEでスコア倍率UP！'+
+    '</div>'+
+    '<div class="row">'+
+      '<button class="btn" id="bEasy">EASY で開始</button>'+
+      '<button class="btn alt" id="bNormal">NORMAL で開始</button>'+
+    '</div>';
+  el('bEasy').onclick=()=>{ CONFIG.difficulty='EASY'; startGame(); };
+  el('bNormal').onclick=()=>{ CONFIG.difficulty='NORMAL'; startGame(); };
 }
-
 function togglePause(){
-  if (!running) return;
-  paused = !paused;
-  if (paused) {
+  if(!running) return;
+  paused=!paused;
+  if(paused){
     overlay.classList.remove('hidden');
-    overlay.innerHTML = '<h1>PAUSE</h1><div class="sub">Pで再開</div>';
-  } else {
-    overlay.classList.add('hidden');
-  }
+    overlay.innerHTML='<h1>PAUSE</h1><div class="sub"><kbd>P</kbd>で再開</div>';
+  } else overlay.classList.add('hidden');
+}
+function gameOver(){
+  running=false;
+  if(score>hi){ hi=score; localStorage.setItem('danmaku_hi',hi); }
+  updateHud();
+  overlay.classList.remove('hidden');
+  overlay.innerHTML=
+    '<h1>GAME OVER</h1>'+
+    '<div class="sub">SCORE<b class="big">'+score+'</b>'+
+    'HI-SCORE '+hi+' / 最大GRAZE '+grazeCount+'</div>'+
+    '<button class="btn" id="bRetry">RETRY</button>';
+  el('bRetry').onclick=showTitle;
 }
 
-// ---- helpers ----
-function spawnParticles(x, y, color, n=14, spd=4){
-  for (let i=0;i<n;i++){
-    const a = Math.random()*Math.PI*2, s = Math.random()*spd+0.5;
-    particles.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s,
-      life: 30+Math.random()*20, color });
-  }
+// ===================== Helpers =====================
+const SS=CONFIG.speedScale;
+function dmul(){ return DIFF[CONFIG.difficulty]; }
+function spawnParticles(x,y,color,n=14,spd=4){
+  for(let i=0;i<n;i++){ const a=rnd()*Math.PI*2,s=rnd()*spd+0.5;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:28+rnd()*20,color}); }
 }
+// enemy bullet. sp is "design speed"; scaled by global + difficulty.
 function eb(x,y,ang,sp,color='#ff5a8a',r=5){
-  eBullets.push({ x, y, vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp, r, color });
+  const v=sp*SS*dmul().bulletMul;
+  eBullets.push({x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,r,color,ang,sp:v,homing:0});
+}
+function ebHoming(x,y,ang,sp,color,r,turn){
+  const v=sp*SS*dmul().bulletMul;
+  eBullets.push({x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,r,color,ang,sp:v,homing:turn});
+}
+function aimAng(x,y){ return Math.atan2(player.y-y, player.x-x); }
+
+// ===================== Enemy Types =====================
+// 8 archetypes. Each has: hp, color, a move(e) and a fire(e).
+// move patterns vary: dive, sine, zigzag, arc, hover, strafe.
+const TYPES = {
+  // 0: grunt — dives straight, single aimed shot (very easy)
+  grunt: { hp:4, color:0, fireInt:75, move(e){ e.y+=0.9*SS; },
+    fire(e){ eb(e.x,e.y, aimAng(e.x,e.y), 2.2, PALETTE.e[0]); } },
+  // 1: sineShooter — weaves, 3-way aimed
+  weaver: { hp:6, color:5, fireInt:80, move(e){ e.y+=0.8*SS; e.x+=Math.sin(e.t*0.05)*1.6*SS; },
+    fire(e){ const a=aimAng(e.x,e.y); for(let k=-1;k<=1;k++) eb(e.x,e.y,a+k*0.2,2.4,PALETTE.e[5]); } },
+  // 2: ringer — hovers, fires rotating ring
+  ringer: { hp:9, color:1, fireInt:95, hover:130,
+    move(e){ if(e.y<e.hover) e.y+=1.0*SS; else e.x+=Math.sin(e.t*0.03)*1.2*SS; },
+    fire(e){ const m=10; for(let k=0;k<m;k++) eb(e.x,e.y,(k/m)*Math.PI*2+e.t*0.04,1.9,PALETTE.e[1]); } },
+  // 3: fan — hovers, wide aimed fan
+  fanner: { hp:8, color:3, fireInt:90, hover:110,
+    move(e){ if(e.y<e.hover) e.y+=1.1*SS; else e.x+=Math.cos(e.t*0.025)*1.4*SS; },
+    fire(e){ const a=aimAng(e.x,e.y); for(let k=-3;k<=3;k++) eb(e.x,e.y,a+k*0.14,2.3,PALETTE.e[3]); } },
+  // 4: strafer — crosses screen horizontally, drops bullets downward
+  strafer: { hp:5, color:6, fireInt:28,
+    move(e){ e.x+=e.dir*2.2*SS; e.y+=Math.sin(e.t*0.06)*0.4; },
+    fire(e){ eb(e.x,e.y,Math.PI/2,2.0,PALETTE.e[6]); } },
+  // 5: splitter — dives, fires bullets that split into 3 mid-flight
+  splitter: { hp:10, color:2, fireInt:110, hover:90,
+    move(e){ if(e.y<e.hover) e.y+=1.0*SS; else e.x+=Math.sin(e.t*0.04)*1.0*SS; },
+    fire(e){ const a=aimAng(e.x,e.y); const b=eBulletSplit(e.x,e.y,a,1.8,PALETTE.e[2]); } },
+  // 6: sniper — hovers high, charges then fires fast aimed laser-ish burst
+  sniper: { hp:7, color:7, fireInt:120, hover:80,
+    move(e){ if(e.y<e.hover) e.y+=1.2*SS; },
+    fire(e){ // telegraph laser
+      lasers.push({x:e.x,y:e.y,ang:aimAng(e.x,e.y),charge:0,max:50,fired:false,owner:e}); } },
+  // 7: homer — slow, fires homing bullets (rare, dangerous but slow)
+  homer: { hp:12, color:4, fireInt:140, hover:120,
+    move(e){ if(e.y<e.hover) e.y+=0.7*SS; else e.x+=Math.sin(e.t*0.02)*0.8*SS; },
+    fire(e){ const a=aimAng(e.x,e.y); ebHoming(e.x,e.y,a,1.4,PALETTE.e[4],6,0.012); } },
+};
+const TYPE_KEYS = Object.keys(TYPES);
+
+// split bullet: store a timer so it divides mid-flight
+function eBulletSplit(x,y,ang,sp,color){
+  const v=sp*SS*dmul().bulletMul;
+  eBullets.push({x,y,vx:Math.cos(ang)*v,vy:Math.sin(ang)*v,r:6,color,ang,sp:v,homing:0,
+    split:40});
 }
 
-// ---- enemies ----
+// ===================== Waves / Formations =====================
+function spawnEnemy(type,x,y,extra={}){
+  const t=TYPES[type];
+  enemies.push(Object.assign({
+    type, x, y, t:0, fire:0, r:15,
+    hp: Math.ceil(t.hp*dmul().hpMul + wave*0.6),
+    score:100, dir:1, hover:t.hover||100,
+  }, extra));
+}
+
 function spawnWave(){
   wave++;
-  if (wave % 5 === 0){ spawnBoss(); return; }
-  const n = 3 + Math.min(5, Math.floor(wave/2));
-  const pat = wave % 4;
-  for (let i=0;i<n;i++){
-    enemies.push({
-      x: (i+1)*W/(n+1), y: -40 - i*30,
-      r: 16, hp: 6 + wave, t: Math.random()*100,
-      type: pat, fire: 0,
-      vx: 0, vy: 1.1,
-      score: 100
-    });
+  if(wave%5===0){ spawnBoss(); return; }
+  // pick formation; introduce harder types gradually
+  const pool = wave<3 ? ['grunt','weaver']
+             : wave<6 ? ['grunt','weaver','ringer','fanner','strafer']
+             : ['grunt','weaver','ringer','fanner','strafer','splitter','sniper','homer'];
+  const form = wave % 4;
+  if(form===0){ // V formation
+    const type=pool[Math.floor(rnd()*pool.length)];
+    const n=5;
+    for(let i=0;i<n;i++){ const off=Math.abs(i-(n-1)/2);
+      spawnEnemy(type,(i+1)*W/(n+1),-30-off*28); }
+  } else if(form===1){ // strafe line from a side
+    const dir=rnd()<0.5?1:-1; const y0=70;
+    for(let i=0;i<5;i++) spawnEnemy('strafer', dir>0?-30-i*60:W+30+i*60, y0+i*22, {dir});
+  } else if(form===2){ // mixed row
+    const n=4;
+    for(let i=0;i<n;i++){ const type=pool[Math.floor(rnd()*pool.length)];
+      spawnEnemy(type,(i+1)*W/(n+1),-40-i*20); }
+  } else { // scattered tough types
+    const n=3+Math.min(3,Math.floor(wave/3));
+    for(let i=0;i<n;i++){ const type=pool[Math.floor(rnd()*pool.length)];
+      spawnEnemy(type, rrange(50,W-50), -40-i*40); }
   }
 }
 
 function spawnBoss(){
-  boss = {
-    x: W/2, y: -120, tx: W/2, ty: 150,
-    r: 40, hp: 220 + wave*30, maxhp: 220 + wave*30,
-    t: 0, phase: 0, entering: true, score: 5000
-  };
+  boss={ x:W/2,y:-120,tx:W/2,ty:140,r:42,
+    hp:Math.ceil((260+wave*28)*dmul().hpMul), maxhp:0, t:0, entering:true, score:6000 };
+  boss.maxhp=boss.hp;
+  Audio2.boss();
 }
 
-function enemyFire(e){
-  const ang = Math.atan2(player.y - e.y, player.x - e.x);
-  if (e.type === 0){ // aimed 3-way
-    for (let k=-1;k<=1;k++) eb(e.x, e.y, ang + k*0.22, 3.0);
-  } else if (e.type === 1){ // ring
-    const m = 10;
-    for (let k=0;k<m;k++) eb(e.x, e.y, (k/m)*Math.PI*2 + e.t*0.05, 2.4, '#ffb95a');
-  } else if (e.type === 2){ // spiral aimed
-    eb(e.x, e.y, ang, 3.4, '#5affc8');
-    eb(e.x, e.y, ang+0.4, 3.0, '#5affc8');
-    eb(e.x, e.y, ang-0.4, 3.0, '#5affc8');
-  } else { // wave shot
-    for (let k=-2;k<=2;k++) eb(e.x, e.y, Math.PI/2 + k*0.18, 2.8, '#c98aff');
-  }
-}
-
+// ===================== Boss patterns (3 phases, slowed) =====================
 function bossPattern(b){
-  const cx=b.x, cy=b.y, t=b.t;
-  const phase = Math.floor(t/300) % 3;
-  if (phase === 0){ // rotating spiral
-    if (t % 4 === 0){
-      const arms = 4;
-      for (let a=0;a<arms;a++){
-        const ang = t*0.08 + a*(Math.PI*2/arms);
-        eb(cx, cy, ang, 2.8, '#ff5a8a', 5);
-      }
-    }
-  } else if (phase === 1){ // aimed bursts + ring
-    if (t % 60 === 0){
-      const aim = Math.atan2(player.y-cy, player.x-cx);
-      for (let k=-3;k<=3;k++) eb(cx, cy, aim+k*0.13, 3.4, '#ffb95a');
-    }
-    if (t % 8 === 0){
-      const m=18;
-      for(let k=0;k<m;k++) eb(cx,cy,(k/m)*Math.PI*2 + t*0.02, 1.8,'#5ad1ff',4);
-    }
-  } else { // flower
-    if (t % 6 === 0){
-      const m=12;
-      for(let k=0;k<m;k++){
-        const ang=(k/m)*Math.PI*2 + Math.sin(t*0.03)*1.2;
-        eb(cx,cy,ang, 2.6 + Math.sin(t*0.05),'#c98aff',5);
-      }
-    }
+  const cx=b.x,cy=b.y,t=b.t;
+  const phase=Math.floor(t/360)%3;
+  if(phase===0){ // gentle rotating spiral
+    if(t%6===0){ const arms=3;
+      for(let a=0;a<arms;a++) eb(cx,cy, t*0.06+a*(Math.PI*2/arms), 2.0, PALETTE.e[4],5); }
+  } else if(phase===1){ // aimed bursts + slow ring
+    if(t%75===0){ const aim=aimAng(cx,cy);
+      for(let k=-3;k<=3;k++) eb(cx,cy,aim+k*0.13,2.6,PALETTE.e[1]); }
+    if(t%12===0){ const m=16;
+      for(let k=0;k<m;k++) eb(cx,cy,(k/m)*Math.PI*2+t*0.015,1.5,PALETTE.e[5],4); }
+  } else { // breathing flower
+    if(t%9===0){ const m=10;
+      for(let k=0;k<m;k++) eb(cx,cy,(k/m)*Math.PI*2+Math.sin(t*0.03)*1.0, 2.0+Math.sin(t*0.05)*0.6, PALETTE.e[3],5); }
   }
 }
 
-// ---- main update ----
+// ===================== Mechanics =====================
+function fireShot(){
+  // power scales shot count
+  const lvl=Math.min(power,4);
+  const y=player.y-12;
+  if(lvl>=1){ pBullets.push({x:player.x-7,y,vy:-11,vx:0,r:4});
+              pBullets.push({x:player.x+7,y,vy:-11,vx:0,r:4}); }
+  if(lvl>=2){ pBullets.push({x:player.x,y:y-6,vy:-12,vx:0,r:4}); }
+  if(lvl>=3){ pBullets.push({x:player.x-13,y,vy:-10.5,vx:-1.2,r:3});
+              pBullets.push({x:player.x+13,y,vy:-10.5,vx:1.2,r:3}); }
+  if(lvl>=4){ pBullets.push({x:player.x-20,y,vy:-10,vx:-2.2,r:3});
+              pBullets.push({x:player.x+20,y,vy:-10,vx:2.2,r:3}); }
+  Audio2.shot();
+}
+function tryBomb(){
+  if(!running||paused||bombs<=0||!gameStarted) return;
+  bombs--; player.inv=Math.max(player.inv,CONFIG.bombInvuln);
+  bombFlash=22; shake=14; Audio2.bomb();
+  // clear bullets, convert to score
+  score+=eBullets.length*15*mult|0;
+  spawnParticles(player.x,player.y,'#fff',60,9);
+  eBullets.length=0; lasers.length=0;
+  // damage enemies/boss on screen
+  for(const e of enemies) e.hp-=8;
+  if(boss&&!boss.entering) boss.hp-=120;
+  updateHud();
+}
+function dropPowerup(x,y){
+  // 22% power, else small score gem
+  const t = rnd()<0.22 ? 'P' : 'S';
+  powerups.push({x,y,vy:1.1*SS,type:t});
+}
+function addCombo(pts){
+  combo++; comboTimer=120;
+  mult = Math.min(8, 1 + combo*0.1);
+  score += Math.floor(pts*mult);
+}
+
+// ===================== Update =====================
 function update(){
   frame++;
+  if(bombFlash>0) bombFlash--;
   // stars
-  for (const s of stars){ s.y += s.z*2.2; if (s.y>H){ s.y=0; s.x=Math.random()*W; } }
+  for(const s of stars){ s.y+=s.z*2.0; if(s.y>H){ s.y=0; s.x=rnd()*W; } }
 
-  // player movement
-  const slow = keys['shift'];
-  const sp = slow ? player.slow : player.speed;
-  let dx=0, dy=0;
-  if (keys['arrowleft']||keys['a']) dx--;
-  if (keys['arrowright']||keys['d']) dx++;
-  if (keys['arrowup']||keys['w']) dy--;
-  if (keys['arrowdown']||keys['s']) dy++;
-  if (dx&&dy){ dx*=0.707; dy*=0.707; }
-  player.x = Math.max(player.r, Math.min(W-player.r, player.x+dx*sp));
-  player.y = Math.max(player.r, Math.min(H-player.r, player.y+dy*sp));
-  if (player.inv>0) player.inv--;
+  // combo decay
+  if(comboTimer>0){ comboTimer--; if(comboTimer===0){ combo=0; mult=1; } }
 
-  // shoot
-  if (player.cool>0) player.cool--;
-  if ((keys['z']||keys[' ']) && player.cool===0){
-    pBullets.push({x:player.x-7,y:player.y-10,vy:-11,r:4});
-    pBullets.push({x:player.x+7,y:player.y-10,vy:-11,r:4});
-    player.cool = 6;
+  // ---- player movement ----
+  let px=player.x, py=player.y;
+  if(touch.active){
+    // move toward touch point (offset above finger so it's visible)
+    const tx=touch.x, ty=touch.y-30;
+    px += (tx-px)*0.35; py += (ty-py)*0.35;
+  } else {
+    const slow=keys['shift'];
+    const sp=(slow?CONFIG.player.slow:CONFIG.player.speed);
+    let dx=0,dy=0;
+    if(keys['arrowleft']||keys['a']) dx--;
+    if(keys['arrowright']||keys['d']) dx++;
+    if(keys['arrowup']||keys['w']) dy--;
+    if(keys['arrowdown']||keys['s']) dy++;
+    if(dx&&dy){ dx*=0.707; dy*=0.707; }
+    px+=dx*sp; py+=dy*sp;
   }
+  const pr=CONFIG.player.r;
+  player.x=Math.max(pr,Math.min(W-pr,px));
+  player.y=Math.max(pr,Math.min(H-pr,py));
+  if(player.inv>0) player.inv--;
 
-  // spawn waves
-  if (!boss){
+  // ---- shooting (auto on touch, key otherwise) ----
+  if(player.cool>0) player.cool--;
+  const shooting = touch.active || keys['z'] || keys[' '];
+  if(shooting && player.cool===0){ fireShot(); player.cool=CONFIG.player.fireCool; }
+
+  // ---- spawn waves ----
+  if(!boss){
     spawnTimer--;
-    if (spawnTimer<=0 && enemies.length===0){
+    if(spawnTimer<=0 && enemies.length===0){
       spawnWave();
-      spawnTimer = 120;
+      spawnTimer=Math.floor(CONFIG.waveGap*dmul().spawnGapMul);
     }
   }
 
-  // enemies
-  for (const e of enemies){
-    e.t++;
-    e.y += e.vy;
-    e.x += Math.sin(e.t*0.04)*1.2;
-    if (e.y>120) e.vy = Math.max(0, e.vy-0.05);
+  // ---- enemies ----
+  for(const e of enemies){
+    e.t++; const def=TYPES[e.type];
+    def.move(e);
     e.fire++;
-    const interval = e.type===1?90:60;
-    if (e.y>20 && e.fire%interval===0) enemyFire(e);
+    const interval=Math.floor(def.fireInt*dmul().fireRateMul);
+    if(e.y>15 && e.fire%interval===0 && e.y<H) def.fire(e);
   }
+  // cull offscreen (strafers leaving, divers passing bottom)
+  enemies=enemies.filter(e=> e.hp>0 && e.y<H+60 && e.x>-80 && e.x<W+80);
 
-  // boss logic
-  if (boss){
-    if (boss.entering){
-      boss.y += (boss.ty - boss.y)*0.03;
-      if (Math.abs(boss.y-boss.ty)<2){ boss.entering=false; }
-    } else {
-      boss.t++;
-      boss.x = W/2 + Math.sin(boss.t*0.02)*140;
-      bossPattern(boss);
+  // ---- lasers (sniper telegraph then fire) ----
+  for(const L of lasers){
+    L.charge++;
+    if(!L.fired && L.charge>=L.max){
+      L.fired=true;
+      // fire a fast tight 3-bullet burst along ang
+      for(let k=0;k<3;k++) eb(L.x,L.y,L.ang,3.4-k*0.2,'#ff5050',4);
     }
   }
+  lasers=lasers.filter(L=>L.charge<L.max+6);
 
-  // player bullets
-  for (const b of pBullets){ b.y += b.vy; }
-  pBullets = pBullets.filter(b=>b.y>-20);
+  // ---- boss ----
+  if(boss){
+    if(boss.entering){ boss.y+=(boss.ty-boss.y)*0.03;
+      if(Math.abs(boss.y-boss.ty)<2) boss.entering=false; }
+    else { boss.t++; boss.x=W/2+Math.sin(boss.t*0.018)*130; bossPattern(boss); }
+  }
 
-  // collision: pBullets vs enemies
-  for (const b of pBullets){
-    for (const e of enemies){
-      if (Math.hypot(b.x-e.x,b.y-e.y) < e.r+b.r){
-        e.hp -= 1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',3,2); break;
+  // ---- player bullets ----
+  for(const b of pBullets){ b.y+=b.vy; b.x+=b.vx; }
+  pBullets=pBullets.filter(b=>b.y>-20);
+
+  // pBullets vs enemies
+  for(const b of pBullets){
+    for(const e of enemies){
+      if(Math.abs(b.x-e.x)<e.r && Math.abs(b.y-e.y)<e.r &&
+         Math.hypot(b.x-e.x,b.y-e.y)<e.r+b.r){
+        e.hp-=1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',2,2); Audio2.hit(); break;
       }
     }
-    if (boss && !boss.entering && Math.hypot(b.x-boss.x,b.y-boss.y)<boss.r+b.r){
-      boss.hp -= 1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',3,2);
+    if(boss&&!boss.entering&&Math.hypot(b.x-boss.x,b.y-boss.y)<boss.r+b.r){
+      boss.hp-=1; b.dead=true; spawnParticles(b.x,b.y,'#5ad1ff',2,2);
     }
   }
-  pBullets = pBullets.filter(b=>!b.dead);
+  pBullets=pBullets.filter(b=>!b.dead);
 
-  // dead enemies
-  for (const e of enemies){
-    if (e.hp<=0){
-      score += e.score; spawnParticles(e.x,e.y,'#ffb95a',22,5); shake=6;
+  // dead enemies -> score, drops
+  for(const e of enemies){
+    if(e.hp<=0){
+      addCombo(e.score); spawnParticles(e.x,e.y,PALETTE.e[TYPES[e.type].color],18,5);
+      Audio2.explode(); shake=Math.max(shake,5);
+      if(rnd()<0.5) dropPowerup(e.x,e.y);
     }
   }
-  enemies = enemies.filter(e=>e.hp>0 && e.y<H+60);
+  enemies=enemies.filter(e=>e.hp>0);
 
-  if (boss && boss.hp<=0){
-    score += boss.score; spawnParticles(boss.x,boss.y,'#ff5a8a',60,8);
-    shake=20; boss=null; spawnTimer=90;
+  if(boss&&boss.hp<=0){
+    score+=boss.score; spawnParticles(boss.x,boss.y,'#ff5a8a',70,9);
+    Audio2.explode(); Audio2.explode(); shake=22;
+    for(let i=0;i<4;i++) dropPowerup(boss.x+rrange(-40,40),boss.y+rrange(-20,20));
+    boss=null; spawnTimer=Math.floor(CONFIG.waveGap*dmul().spawnGapMul);
   }
 
-  // enemy bullets
-  for (const b of eBullets){ b.x+=b.vx; b.y+=b.vy; }
-  eBullets = eBullets.filter(b=> b.x>-20&&b.x<W+20&&b.y>-20&&b.y<H+20);
-
-  // collision: eBullets vs player
-  if (player.inv<=0){
-    for (const b of eBullets){
-      if (Math.hypot(b.x-player.x,b.y-player.y) < b.r+player.hitR){
-        hitPlayer(); break;
+  // ---- enemy bullets (move, split, homing) ----
+  for(const b of eBullets){
+    if(b.homing){ // steer toward player
+      const want=aimAng(b.x,b.y);
+      let da=want-b.ang;
+      while(da>Math.PI) da-=Math.PI*2; while(da<-Math.PI) da+=Math.PI*2;
+      b.ang += Math.max(-b.homing,Math.min(b.homing,da));
+      b.vx=Math.cos(b.ang)*b.sp; b.vy=Math.sin(b.ang)*b.sp;
+    }
+    b.x+=b.vx; b.y+=b.vy;
+    if(b.split!==undefined){ b.split--;
+      if(b.split<=0){ b.dead=true;
+        const base=Math.atan2(b.vy,b.vx);
+        for(let k=-1;k<=1;k++) eb(b.x,b.y,base+k*0.4, Math.hypot(b.vx,b.vy)/(SS*dmul().bulletMul), b.color, 4);
       }
     }
-    for (const e of enemies){
-      if (Math.hypot(e.x-player.x,e.y-player.y) < e.r+player.hitR){
-        hitPlayer(); break;
-      }
+  }
+  eBullets=eBullets.filter(b=>!b.dead && b.x>-30&&b.x<W+30&&b.y>-30&&b.y<H+30);
+
+  // ---- powerups ----
+  for(const p of powerups){ p.y+=p.vy;
+    if(Math.hypot(p.x-player.x,p.y-player.y)<22){
+      p.dead=true;
+      if(p.type==='P'){ power=Math.min(5,power+1); Audio2.power(); }
+      else { score+=200*mult|0; }
     }
   }
+  powerups=powerups.filter(p=>!p.dead && p.y<H+20);
 
-  // particles
-  for (const p of particles){ p.x+=p.vx; p.y+=p.vy; p.vx*=0.94; p.vy*=0.94; p.life--; }
-  particles = particles.filter(p=>p.life>0);
+  // ---- collisions vs player + graze ----
+  if(player.inv<=0 && !player.dead){
+    const grR=CONFIG.player.grazeR, hitR=CONFIG.player.hitR;
+    for(const b of eBullets){
+      const d=Math.hypot(b.x-player.x,b.y-player.y);
+      if(d<b.r+hitR){ hitPlayer(); break; }
+      else if(d<b.r+grR && !b.grazed){ b.grazed=true; grazeCount++;
+        score+=20*mult|0; comboTimer=Math.max(comboTimer,90); }
+    }
+    if(!player.dead) for(const e of enemies){
+      if(Math.hypot(e.x-player.x,e.y-player.y)<e.r+hitR){ hitPlayer(); break; }
+    }
+    // laser beams hit
+    if(!player.dead) for(const L of lasers){ if(!L.fired) continue; }
+  }
 
-  if (shake>0) shake--;
-  score += 1; // survival bonus
+  // ---- particles ----
+  for(const p of particles){ p.x+=p.vx; p.y+=p.vy; p.vx*=0.94; p.vy*=0.94; p.life--; }
+  particles=particles.filter(p=>p.life>0);
+
+  if(shake>0) shake--;
+  score+=1; // survival trickle
   updateHud();
 }
 
 function hitPlayer(){
-  life--; player.inv = 120;
-  eBullets = []; // clear screen as a bomb-on-death
+  life--; player.inv=CONFIG.bombInvuln; power=Math.max(1,power-1);
+  combo=0; mult=1;
+  eBullets.length=0; lasers.length=0;
   spawnParticles(player.x,player.y,'#5ad1ff',40,6); shake=16;
-  if (life<=0) gameOver();
+  Audio2.damage();
+  if(life<=0){ player.dead=true; gameOver(); }
   updateHud();
 }
 
-function gameOver(){
-  running=false;
-  if (score>hi){ hi=score; localStorage.setItem('danmaku_hi',hi); }
-  updateHud();
-  overlay.classList.remove('hidden');
-  overlay.innerHTML =
-    '<h1>GAME OVER</h1>'+
-    '<div class="sub">SCORE <b class="big" style="display:block">'+score+'</b>'+
-    'HI-SCORE '+hi+'</div>'+
-    '<button class="btn" id="restartBtn">RETRY</button>';
-  document.getElementById('restartBtn').onclick = startGame;
-}
-
-// ---- render ----
+// ===================== Render =====================
 function draw(){
   ctx.save();
-  if (shake>0) ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
-
-  ctx.fillStyle = '#04040a';
-  ctx.fillRect(-20,-20,W+40,H+40);
+  if(shake>0) ctx.translate((rnd()-.5)*shake,(rnd()-.5)*shake);
+  ctx.fillStyle=PALETTE.bg; ctx.fillRect(-30,-30,W+60,H+60);
 
   // stars
-  for (const s of stars){
-    ctx.globalAlpha = s.z;
-    ctx.fillStyle = '#8fa6ff';
-    ctx.fillRect(s.x, s.y, s.z*2, s.z*2);
+  for(const s of stars){ ctx.globalAlpha=s.z; ctx.fillStyle=PALETTE.star;
+    ctx.fillRect(s.x,s.y,s.z*2,s.z*2); }
+  ctx.globalAlpha=1;
+
+  // powerups
+  for(const p of powerups){
+    ctx.fillStyle = p.type==='P' ? '#ffd95a' : '#5affc8';
+    ctx.beginPath(); ctx.arc(p.x,p.y,7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#04040a'; ctx.font='bold 9px monospace'; ctx.textAlign='center';
+    ctx.fillText(p.type,p.x,p.y+3);
   }
-  ctx.globalAlpha = 1;
+  ctx.textAlign='left';
 
   // particles
-  for (const p of particles){
-    ctx.globalAlpha = Math.max(0,p.life/45);
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x-1.5, p.y-1.5, 3, 3);
-  }
-  ctx.globalAlpha = 1;
+  for(const p of particles){ ctx.globalAlpha=Math.max(0,p.life/45);
+    ctx.fillStyle=p.color; ctx.fillRect(p.x-1.5,p.y-1.5,3,3); }
+  ctx.globalAlpha=1;
 
   // player bullets
-  ctx.fillStyle = '#9fe8ff';
-  for (const b of pBullets){
-    ctx.fillRect(b.x-b.r/2, b.y-b.r*2, b.r, b.r*3);
-  }
+  ctx.fillStyle=PALETTE.pBul;
+  for(const b of pBullets) ctx.fillRect(b.x-b.r/2,b.y-b.r*2,b.r,b.r*3);
 
   // enemies
-  for (const e of enemies){
-    ctx.fillStyle = '#ff7aa8';
-    ctx.beginPath(); ctx.moveTo(e.x, e.y+e.r);
-    ctx.lineTo(e.x-e.r, e.y-e.r); ctx.lineTo(e.x+e.r, e.y-e.r);
+  for(const e of enemies){
+    const col=PALETTE.e[TYPES[e.type].color];
+    ctx.fillStyle=col;
+    ctx.beginPath(); ctx.moveTo(e.x,e.y+e.r);
+    ctx.lineTo(e.x-e.r,e.y-e.r); ctx.lineTo(e.x+e.r,e.y-e.r);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillRect(e.x-2,e.y-2,4,4);
+    ctx.fillStyle='#fff'; ctx.fillRect(e.x-2,e.y-2,4,4);
+  }
+
+  // sniper laser telegraph
+  for(const L of lasers){
+    if(L.fired) continue;
+    const a=L.charge/L.max;
+    ctx.globalAlpha=0.25+a*0.5; ctx.strokeStyle='#ff5050'; ctx.lineWidth=1+a*2;
+    ctx.beginPath(); ctx.moveTo(L.x,L.y);
+    ctx.lineTo(L.x+Math.cos(L.ang)*900,L.y+Math.sin(L.ang)*900); ctx.stroke();
+    ctx.globalAlpha=1; ctx.lineWidth=1;
   }
 
   // boss
-  if (boss){
-    ctx.save();
-    ctx.translate(boss.x, boss.y);
-    ctx.rotate(boss.t*0.01);
-    ctx.fillStyle = '#ff5a8a';
-    ctx.beginPath();
-    for (let i=0;i<6;i++){
-      const a=i/6*Math.PI*2;
-      ctx[i?'lineTo':'moveTo'](Math.cos(a)*boss.r, Math.sin(a)*boss.r);
-    }
+  if(boss){
+    ctx.save(); ctx.translate(boss.x,boss.y); ctx.rotate(boss.t*0.008);
+    ctx.fillStyle='#ff5a8a'; ctx.beginPath();
+    for(let i=0;i<6;i++){ const a=i/6*Math.PI*2;
+      ctx[i?'lineTo':'moveTo'](Math.cos(a)*boss.r,Math.sin(a)*boss.r); }
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0,0,8,0,Math.PI*2); ctx.fill();
     ctx.restore();
-    // hp bar
-    ctx.fillStyle='#33203a'; ctx.fillRect(40,14,W-80,6);
-    ctx.fillStyle='#ff5a8a'; ctx.fillRect(40,14,(W-80)*Math.max(0,boss.hp/boss.maxhp),6);
+    ctx.fillStyle='#33203a'; ctx.fillRect(40,30,W-80,6);
+    ctx.fillStyle='#ff5a8a'; ctx.fillRect(40,30,(W-80)*Math.max(0,boss.hp/boss.maxhp),6);
   }
 
   // enemy bullets
-  for (const b of eBullets){
-    ctx.fillStyle = b.color;
+  for(const b of eBullets){
+    ctx.fillStyle=b.color;
     ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
     ctx.globalAlpha=0.4; ctx.fillStyle='#fff';
     ctx.beginPath(); ctx.arc(b.x-b.r*0.3,b.y-b.r*0.3,b.r*0.4,0,Math.PI*2); ctx.fill();
@@ -417,47 +674,43 @@ function draw(){
   }
 
   // player
-  if (!(player.inv>0 && frame%6<3)){
-    const slow = keys['shift'];
-    ctx.save();
-    ctx.translate(player.x, player.y);
-    ctx.fillStyle = '#5ad1ff';
-    ctx.beginPath();
-    ctx.moveTo(0,-player.r);
-    ctx.lineTo(-player.r*0.8, player.r);
-    ctx.lineTo(0, player.r*0.5);
-    ctx.lineTo(player.r*0.8, player.r);
+  if(gameStarted && !(player.inv>0 && frame%6<3)){
+    const slow=keys['shift']||touch.active;
+    ctx.save(); ctx.translate(player.x,player.y);
+    ctx.fillStyle='#5ad1ff'; ctx.beginPath();
+    ctx.moveTo(0,-CONFIG.player.r);
+    ctx.lineTo(-CONFIG.player.r*0.8,CONFIG.player.r);
+    ctx.lineTo(0,CONFIG.player.r*0.5);
+    ctx.lineTo(CONFIG.player.r*0.8,CONFIG.player.r);
     ctx.closePath(); ctx.fill();
-    // hitbox
-    if (slow){
-      ctx.strokeStyle='rgba(255,255,255,.5)';
-      ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.stroke();
-    }
-    ctx.fillStyle = slow ? '#fff' : '#ffe0ec';
-    ctx.beginPath(); ctx.arc(0,0,player.hitR+1,0,Math.PI*2); ctx.fill();
+    if(slow){ ctx.strokeStyle='rgba(255,255,255,.4)';
+      ctx.beginPath(); ctx.arc(0,0,CONFIG.player.grazeR,0,Math.PI*2); ctx.stroke(); }
+    ctx.fillStyle='#fff'; ctx.beginPath();
+    ctx.arc(0,0,CONFIG.player.hitR+1,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 
+  // bomb flash
+  if(bombFlash>0){ ctx.globalAlpha=bombFlash/22*0.6; ctx.fillStyle='#fff';
+    ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; }
+
   ctx.restore();
+
+  // mute indicator
+  if(Audio2.isMuted()){ ctx.fillStyle='#8c9bd0'; ctx.font='11px monospace';
+    ctx.fillText('MUTED (M)',W-78,H-12); }
 }
 
-// ---- loop ----
+// ===================== Loop =====================
 function loop(){
-  if (running && !paused){ update(); draw(); }
+  if(running && !paused){ update(); draw(); }
   requestAnimationFrame(loop);
 }
 
-function startGame(){
-  overlay.classList.add('hidden');
-  reset();
-}
-
-// Initialize state before the first draw(). Without this, the initial title
-// screen render tries to access player/stars before reset() has created them.
-reset();
-running = false;
-showTitleOverlay();
+// init: prepare state so the first draw() is safe, then show title
+reset(); running=false; gameStarted=false;
 draw();
+showTitle();
 loop();
 </script>
 </body>
