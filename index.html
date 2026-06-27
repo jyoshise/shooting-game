@@ -71,6 +71,7 @@ const ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height;
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
+const titleOverlayHtml = overlay.innerHTML;
 const elScore = document.getElementById('score');
 const elLife  = document.getElementById('life');
 const elHi    = document.getElementById('hi');
@@ -107,6 +108,12 @@ function updateHud(){
   elScore.textContent = score;
   elLife.textContent = Math.max(0, life);
   elHi.textContent = hi;
+}
+
+function showTitleOverlay(){
+  overlay.innerHTML = titleOverlayHtml;
+  overlay.classList.remove('hidden');
+  document.getElementById('startBtn').onclick = startGame;
 }
 
 function togglePause(){
@@ -445,7 +452,11 @@ function startGame(){
   reset();
 }
 
-startBtn.onclick = startGame;
+// Initialize state before the first draw(). Without this, the initial title
+// screen render tries to access player/stars before reset() has created them.
+reset();
+running = false;
+showTitleOverlay();
 draw();
 loop();
 </script>
